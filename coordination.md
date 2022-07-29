@@ -9,21 +9,91 @@
 
 为了保证更新操作满足线性化，Zookeeper实现了基于领导者的原子广播协议 Zab。ZooKeeper 应用的主要负载是读操作，所以需要保证读吞吐量的可扩展。在 ZooKeeper 中，服务器在本地处理读操作，并不需要使用 Zab。
 
-ZooKeeper 使用 watch 机制使得客户端不需要直接管理客户端缓存。使用这一机制，对于一个给定的数据对象，客户端可以监视到更新，当有更新的时候收到通知消息。
+ZooKeeper 使用 watch 机制使得客户端不需要直接管理客户端缓存。使用这一机制，对于一个给定的数据对象，客户端可以监视到更新，当有更新的时候收到通知消息。watch机制由Follower实现而不是Leader
 
 ### Zookeeper服务
 
 #### 数据模型
-Zookeeper 给客户端提供了数据节点集（znodes）抽象表示，数据节点集以层次化命名空间的形式组织。znodes 是 Zookeeper 层次化结构中提供给客户端通过 API 操作的数据对象。
+##### ZNode
+Zookeeper 给客户端提供了数据节点集（znodes）抽象表示，数据节点集以层次化命名空间的形式组织，类似于文件系统的组织方式。znodes 是 Zookeeper 层次化结构中提供给客户端通过 API 操作的数据对象。Zookeeper提供两种类型的结点
 
+1. 临时结点
+   
+   临时结点依赖于结点创建的会话，会话结束会被自动删除，不可以拥有子节点
+   
+2. 普通结点
+   
+   不依赖于会话，由客户端显式的创建和删除。
+   
+Znode是用来映射客户端应用的抽象表示，存放用于协调的元数据信息，主要包括以下三部分：
 
+1. 结点状态信息：包括版本号、更改时间、访问控制列表(ACL)等
+
+2. 结点的内容数据：主要用于协调调度
+
+3. Znode的子结点
+
+Zookeeper可以创建顺序结点，在结点名字结尾处添加一个自增的id
+
+##### Zxid(ZooKeeper Transaction Id)
+所有对Zookeeper状态的改变都会产生一个全局有序的Zxid，用来标识事件发生的先后顺序。
+
+每个ZNode维护两个Zxid:
+
+1. cZxid: Znode创建时的Zxid
+
+2. mZxid: Znode最近修改的Zxid
+
+Zxid是一个64位的数字, 高32位表示Zookeeper集群leader, 低32位表示逻辑顺序
 
 #### 客户端Zookeeper API
 
+create(path, data, flags)：使用 path 名称创建一个 znode 节点，保存 data，返回新创建的 znode 名称。 flags 用于创建普通或者临时节点，也可以设置顺序标识。
+
+delete(path, version)： 删除指定 path 和 version 的 znode 节点。
+
+exists(path, watch)： 如果指定 path 的 znode 存在则返回真，如果不存在则返回假。watch 标识用于在 znode 上设置监视器。
+
+getData(path, watch)： 返回数据和元数据，如版本信息。watch 标识与 exists() 的 watch 标识一样，但如果 znode 不存在则不会设置监视器。
+
+setData(path, data, version)： 根据 path 和 version 将数据写入到 znode。
+
+getChildren(path, watch)： 返回 znode 所有子节点的名称集合。
+
+sync(path)： 在操作开始时，等待所有挂起的更新操作发送到客户端连接的服务器。path 当前未使用。
+
+每次的更新都是对给定版本的更新，如果实际版本号与期望的版本号不一致，更新操作就会失败。
+
+#### watch机制
+Watch 触发是一次性的，当触发器通知了一次状态变化后消失，不会通知状态的再次变化。
+Zookeeper与客户端之间通过 Tcp Socket 进行通信，保证会将监视的Znode变化主动通知客户端。
+
+Zookeeper 支持三种类型的watch:
+
+1. exists: 被监视的Znode 创建、删除、数据改变时被触发
+
+2. getData: 被监视的Znode 删除、数据改变时被触发
+
+3. getChildren: 被监视的Znode 删除、创建子节点、删除子节点时被触发
 
 
 #### Zookeeper保证
+Zookeeper对于操作的执行顺序提供两个基本保证：
 
+1. 线性化写
+
+   所有更新Zookeeper状态的请求都是都是序列化的并且遵循优先级
+
+2. FIFO的客户端请求顺序
+  
+   对于一个客户端的所有请求，都会按客户端发送的顺序执行
+
+值得注意的是，对于读请求，是顺序一致性的，可能会读到过时的数据，保证最终一致性
+
+**顺序一致性和线性一致性的区别**：
+线性一致性：是一种强一致性，强调全局的顺序
+
+顺序一致性：强调偏序，只保证每个结点的执行操作是有序的，不保证结点的顺序。
 
 
 ### Zookeeper实现
